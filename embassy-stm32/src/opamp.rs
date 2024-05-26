@@ -114,6 +114,43 @@ impl<'d, T: Instance> OpAmp<'d, T> {
         OpAmpOutput { _inner: self }
     }
 
+    /// Configure the OpAmp as a buffer for the DAC it is connected to,
+    /// outputting to the provided output pin, and enable the opamp.
+    ///
+    /// The output pin is held within the returned [`OpAmpOutput`] struct,
+    /// preventing it being used elsewhere. The `OpAmpOutput` can then be
+    /// directly used as an ADC input. The opamp will be disabled when the
+    /// [`OpAmpOutput`] is dropped.
+    pub fn buffer_dac(
+        &'d mut self,
+        out_pin: impl Peripheral<P = impl OutputPin<T> + crate::gpio::sealed::Pin> + 'd,
+        gain: OpAmpGain,
+    ) -> OpAmpOutput<'d, T> {
+        into_ref!(out_pin);
+        out_pin.set_as_analog();
+
+        let (vm_sel, pga_gain) = match gain {
+            OpAmpGain::Mul1 => (0b11, 0b00),
+            OpAmpGain::Mul2 => (0b10, 0b00),
+            OpAmpGain::Mul4 => (0b10, 0b01),
+            OpAmpGain::Mul8 => (0b10, 0b10),
+            OpAmpGain::Mul16 => (0b10, 0b11),
+        };
+
+        #[cfg(opamp_g4)]
+        T::regs().opamp_csr().modify(|w| {
+            use crate::pac::opamp::vals::*;
+
+            w.set_vp_sel(OpampCsrVpSel::DAC3_CH1);
+            w.set_vm_sel(OpampCsrVmSel::OUTPUT);
+            w.set_pga_gain(OpampCsrPgaGain::from_bits(pga_gain));
+            w.set_opaintoen(OpampCsrOpaintoen::OUTPUTPIN);
+            w.set_opaen(true);
+        });
+
+        OpAmpOutput { _inner: self }
+    }
+
     /// Configure the OpAmp as a buffer for the provided input pin,
     /// with the output only used internally, and enable the opamp.
     ///
