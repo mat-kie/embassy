@@ -124,26 +124,16 @@ impl<'d, T: Instance> OpAmp<'d, T> {
     pub fn buffer_dac(
         &'d mut self,
         out_pin: impl Peripheral<P = impl OutputPin<T> + crate::gpio::sealed::Pin> + 'd,
-        gain: OpAmpGain,
     ) -> OpAmpOutput<'d, T> {
         into_ref!(out_pin);
         out_pin.set_as_analog();
-
-        let (vm_sel, pga_gain) = match gain {
-            OpAmpGain::Mul1 => (0b11, 0b00),
-            OpAmpGain::Mul2 => (0b10, 0b00),
-            OpAmpGain::Mul4 => (0b10, 0b01),
-            OpAmpGain::Mul8 => (0b10, 0b10),
-            OpAmpGain::Mul16 => (0b10, 0b11),
-        };
 
         #[cfg(opamp_g4)]
         T::regs().opamp_csr().modify(|w| {
             use crate::pac::opamp::vals::*;
 
-            w.set_vp_sel(OpampCsrVpSel::DAC3_CH1);
             w.set_vm_sel(OpampCsrVmSel::OUTPUT);
-            w.set_pga_gain(OpampCsrPgaGain::from_bits(pga_gain));
+            w.set_vp_sel(OpampCsrVpSel::DAC3_CH1);
             w.set_opaintoen(OpampCsrOpaintoen::OUTPUTPIN);
             w.set_opaen(true);
         });
