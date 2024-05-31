@@ -1,6 +1,8 @@
 //! Operational Amplifier (OPAMP)
 #![macro_use]
 
+use core::mem::replace;
+
 use embassy_hal_internal::{into_ref, PeripheralRef};
 
 use crate::pac::opamp::vals::*;
@@ -39,15 +41,55 @@ impl From<OpAmpSpeed> for crate::pac::opamp::vals::Opahsm {
 ///
 /// This struct can also be used as an ADC input.
 pub struct OpAmpOutput<'d, T: Instance, TPin: OutputPin<T> + crate::gpio::Pin> {
-    _inner: OpAmp<'d, T>,
-    _pin: PeripheralRef<'d, TPin>,
+    _inner: Option<(OpAmp<'d, T>, PeripheralRef<'d, TPin>)>,
+}
+
+impl<'d, T: Instance, TPin: OutputPin<T> + crate::gpio::Pin> OpAmpOutput<'d, T, TPin> {
+    /// Disable the opamp output.
+    ///
+    /// If this [`OpAmpOutput`] instance has an active output,
+    /// the output will be diabled and the underlying [`OpAmp`] instance and
+    /// the pin will be returend.
+    /// If this [`OpAmpOutput`] is not active,
+    /// nothing happens and None is returned.
+    pub fn disable(mut self) -> Option<(OpAmp<'d, T>, PeripheralRef<'d, TPin>)> {
+        if self._inner.is_some() {
+            T::regs().csr().modify(|w| {
+                w.set_opampen(false);
+            });
+
+            replace(&mut self._inner, None)
+        } else {
+            None
+        }
+    }
 }
 
 /// OpAmp internal outputs, wired directly to ADC inputs.
 ///
 /// This struct can be used as an ADC input.
 pub struct OpAmpInternalOutput<'d, T: Instance> {
-    _inner: OpAmp<'d, T>,
+    _inner: Option<OpAmp<'d, T>>,
+}
+
+impl<'d, T: Instance> OpAmpInternalOutput<'d, T> {
+    /// Disable the opamp output.
+    ///
+    /// If this [`OpAmpInternalOutput`] instance has an active output,
+    /// the output will be diabled and the underlying [`OpAmp`] instance
+    /// will be returend.
+    /// If this [`OpAmpInternalOutput`] is not active,
+    /// nothing happens and None is returned.
+    pub fn disable(mut self) -> Option<OpAmp<'d, T>> {
+        if self._inner.is_some() {
+            T::regs().csr().modify(|w| {
+                w.set_opampen(false);
+            });
+            replace(&mut self._inner, None)
+        } else {
+            None
+        }
+    }
 }
 
 /// OpAmp driver.
@@ -81,7 +123,7 @@ impl<'d, T: Instance> OpAmp<'d, T> {
     /// directly used as an ADC input. The opamp will be disabled when the
     /// [`OpAmpOutput`] is dropped.
     pub fn buffer_ext<TPin: OutputPin<T> + crate::gpio::Pin>(
-        mut self,
+        self,
         in_pin: impl Peripheral<P = impl NonInvertingPin<T> + crate::gpio::Pin>,
         out_pin: TPin,
         gain: OpAmpGain,
@@ -110,8 +152,7 @@ impl<'d, T: Instance> OpAmp<'d, T> {
         });
 
         OpAmpOutput {
-            _inner: self,
-            _pin: out_pin,
+            _inner: Some((self, out_pin)),
         }
     }
     /// Configure the OpAmp as a buffer for the DAC it is connected to,
@@ -122,7 +163,7 @@ impl<'d, T: Instance> OpAmp<'d, T> {
     /// directly used as an ADC input. The opamp will be disabled when the
     /// [`OpAmpOutput`] is dropped.
     #[cfg(opamp_g4)]
-    pub fn buffer_dac<TPin: OutputPin<T> + crate::gpio::Pin>(mut self, out_pin: TPin) -> OpAmpOutput<'d, T, TPin> {
+    pub fn buffer_dac<TPin: OutputPin<T> + crate::gpio::Pin>(self, out_pin: TPin) -> OpAmpOutput<'d, T, TPin> {
         into_ref!(out_pin);
         out_pin.set_as_analog();
 
@@ -136,8 +177,7 @@ impl<'d, T: Instance> OpAmp<'d, T> {
         });
 
         OpAmpOutput {
-            _inner: self,
-            _pin: out_pin,
+            _inner: Some((self, out_pin)),
         }
     }
 
@@ -151,7 +191,7 @@ impl<'d, T: Instance> OpAmp<'d, T> {
     /// The opamp output will be disabled when it is dropped.
     #[cfg(opamp_g4)]
     pub fn buffer_int(
-        mut self,
+        self,
         pin: impl Peripheral<P = impl NonInvertingPin<T> + crate::gpio::Pin>,
         gain: OpAmpGain,
     ) -> OpAmpInternalOutput<'d, T> {
@@ -176,7 +216,7 @@ impl<'d, T: Instance> OpAmp<'d, T> {
             w.set_opampen(true);
         });
 
-        OpAmpInternalOutput { _inner: self }
+        OpAmpInternalOutput { _inner: Some(self) }
     }
 }
 
