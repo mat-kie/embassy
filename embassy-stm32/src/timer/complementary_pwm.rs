@@ -3,7 +3,7 @@
 use core::marker::PhantomData;
 
 use embassy_hal_internal::{into_ref, PeripheralRef};
-use stm32_metapac::timer::vals::Ckd;
+use stm32_metapac::timer::vals::{Ckd, Mms};
 
 use super::low_level::{CountingMode, OutputPolarity, Timer};
 use super::simple_pwm::{Ch1, Ch2, Ch3, Ch4, PwmPin};
@@ -145,6 +145,11 @@ impl<'d, T: AdvancedInstance4Channel> ComplementaryPwm<'d, T> {
 
         self.inner.set_dead_time_clock_division(ckd);
         self.inner.set_dead_time_value(value);
+    }
+    pub fn set_trigger_output(&mut self, signal: Mms) {
+        self.inner.regs_advanced().cr2().modify(|w| {
+            w.set_mms(signal);
+        });
     }
 }
 
