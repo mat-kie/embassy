@@ -224,6 +224,10 @@ impl Prescaler {
 impl<'d, T: Instance> Adc<'d, T> {
     /// Create a new ADC driver.
     pub fn new(adc: Peri<'d, T>) -> Self {
+        Self::new_triggered(adc, TriggerCfg::Software, false)
+    }
+
+    pub fn new_triggered(adc: Peri<'d, T>, trigger: TriggerCfg, continuous: bool) -> Self {
         rcc::enable_and_reset::<T>();
 
         let prescaler = Prescaler::from_ker_ck(T::frequency());
@@ -246,9 +250,8 @@ impl<'d, T: Instance> Adc<'d, T> {
 
         s.calibrate();
         blocking_delay_us(1);
-
         s.enable();
-        s.configure();
+        s.configure_trigger(trigger, continuous);
 
         s
     }
@@ -313,12 +316,26 @@ impl<'d, T: Instance> Adc<'d, T> {
         }
     }
 
-    fn configure(&mut self) {
-        // single conversion mode, software trigger
-        T::regs().cfgr().modify(|w| {
-            w.set_cont(false);
-            w.set_exten(Exten::DISABLED);
-        });
+    fn configure_trigger(&mut self, trigger: TriggerCfg, continuous: bool) {
+        if let Some((exten, sel)) = match trigger {
+            TriggerCfg::Software => None,
+            TriggerCfg::RisingEdge(src) => Some((Exten::RISING_EDGE, src.into())),
+            TriggerCfg::FallingEdge(src) => Some((Exten::FALLING_EDGE, src.into())),
+            TriggerCfg::BothEdges(src) => Some((Exten::BOTH_EDGES, src.into())),
+        } {
+            // external trigger
+            T::regs().cfgr().modify(|w| {
+                w.set_cont(continuous);
+                w.set_exten(exten);
+                w.set_extsel(sel);
+            });
+        } else {
+            // single conversion mode, software trigger
+            T::regs().cfgr().modify(|w| {
+                w.set_cont(continuous);
+                w.set_exten(Exten::DISABLED);
+            });
+        }
     }
 
     /// Enable reading the voltage reference internal channel.
