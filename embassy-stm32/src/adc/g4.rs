@@ -83,6 +83,94 @@ enum Prescaler {
     DividedBy256,
 }
 
+/// Represents the trigger source for the ADC.
+/// Each variant corresponds to a specific trigger source, either from internal
+/// signals (e.g., on-chip timers) or external events via EXTI.
+#[cfg(stm32g4)]
+pub enum TriggerSource {
+    Tim1Oc1,
+    Tim1Oc2,
+    Tim1Oc3,
+    Tim2Oc2,
+    Tim3Trgo,
+    Tim4Oc4,
+    ExtiLine11,
+    Tim8Trgo,
+    Tim8Trgo2,
+    Tim1Trgo,
+    Tim1Trgo2,
+    Tim2Trgo,
+    Tim4Trgo,
+    Tim6Trgo,
+    Tim15Trgo,
+    Tim3Oc4,
+    Tim20Trgo,
+    Tim20Trgo2,
+    Tim20Oc1,
+    Tim20Oc2,
+    Tim20Oc3,
+    HrtimAdcTrg1,
+    HrtimAdcTrg3,
+    HrtimAdcTrg5,
+    HrtimAdcTrg6,
+    HrtimAdcTrg7,
+    HrtimAdcTrg8,
+    HrtimAdcTrg9,
+    HrtimAdcTrg10,
+    LptimOut,
+    Tim7Trgo,
+}
+
+/// Configuration of the ADC Trigger.
+/// It can be triggered by software or the
+/// edges of a TriggerSource signal.
+#[cfg(stm32g4)]
+pub enum TriggerCfg {
+    Software,
+    RisingEdge(TriggerSource),
+    FallingEdge(TriggerSource),
+    BothEdges(TriggerSource),
+}
+
+#[cfg(stm32g4)]
+impl Into<u8> for TriggerSource {
+    fn into(self) -> u8 {
+        match self {
+            TriggerSource::Tim1Oc1 => 0u8,
+            TriggerSource::Tim1Oc2 => 1u8,
+            TriggerSource::Tim1Oc3 => 2u8,
+            TriggerSource::Tim2Oc2 => 3u8,
+            TriggerSource::Tim3Trgo => 4u8,
+            TriggerSource::Tim4Oc4 => 5u8,
+            TriggerSource::ExtiLine11 => 6u8,
+            TriggerSource::Tim8Trgo => 7u8,
+            TriggerSource::Tim8Trgo2 => 8u8,
+            TriggerSource::Tim1Trgo => 9u8,
+            TriggerSource::Tim1Trgo2 => 10u8,
+            TriggerSource::Tim2Trgo => 11u8,
+            TriggerSource::Tim4Trgo => 12u8,
+            TriggerSource::Tim6Trgo => 13u8,
+            TriggerSource::Tim15Trgo => 14u8,
+            TriggerSource::Tim3Oc4 => 15u8,
+            TriggerSource::Tim20Trgo => 16u8,
+            TriggerSource::Tim20Trgo2 => 17u8,
+            TriggerSource::Tim20Oc1 => 18u8,
+            TriggerSource::Tim20Oc2 => 19u8,
+            TriggerSource::Tim20Oc3 => 20u8,
+            TriggerSource::HrtimAdcTrg1 => 21u8,
+            TriggerSource::HrtimAdcTrg3 => 22u8,
+            TriggerSource::HrtimAdcTrg5 => 23u8,
+            TriggerSource::HrtimAdcTrg6 => 24u8,
+            TriggerSource::HrtimAdcTrg7 => 25u8,
+            TriggerSource::HrtimAdcTrg8 => 26u8,
+            TriggerSource::HrtimAdcTrg9 => 27u8,
+            TriggerSource::HrtimAdcTrg10 => 28u8,
+            TriggerSource::LptimOut => 29u8,
+            TriggerSource::Tim7Trgo => 30u8,
+        }
+    }
+}
+
 impl Prescaler {
     fn from_ker_ck(frequency: Hertz) -> Self {
         let raw_prescaler = frequency.0 / MAX_ADC_CLK_FREQ.0;
