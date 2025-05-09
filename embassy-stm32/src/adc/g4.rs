@@ -1,3 +1,4 @@
+use cortex_m::register::primask::read;
 #[allow(unused)]
 #[cfg(stm32h7)]
 use pac::adc::vals::{Adcaldif, Difsel, Exten};
@@ -87,8 +88,9 @@ enum Prescaler {
 /// Each variant corresponds to a specific trigger source, either from internal
 /// signals (e.g., on-chip timers) or external events via EXTI.
 #[cfg(stm32g4)]
+#[repr(u8)]
 pub enum TriggerSource {
-    Tim1Oc1,
+    Tim1Oc1 = 0,
     Tim1Oc2,
     Tim1Oc3,
     Tim2Oc2,
@@ -130,45 +132,6 @@ pub enum TriggerCfg {
     RisingEdge(TriggerSource),
     FallingEdge(TriggerSource),
     BothEdges(TriggerSource),
-}
-
-#[cfg(stm32g4)]
-impl Into<u8> for TriggerSource {
-    fn into(self) -> u8 {
-        match self {
-            TriggerSource::Tim1Oc1 => 0u8,
-            TriggerSource::Tim1Oc2 => 1u8,
-            TriggerSource::Tim1Oc3 => 2u8,
-            TriggerSource::Tim2Oc2 => 3u8,
-            TriggerSource::Tim3Trgo => 4u8,
-            TriggerSource::Tim4Oc4 => 5u8,
-            TriggerSource::ExtiLine11 => 6u8,
-            TriggerSource::Tim8Trgo => 7u8,
-            TriggerSource::Tim8Trgo2 => 8u8,
-            TriggerSource::Tim1Trgo => 9u8,
-            TriggerSource::Tim1Trgo2 => 10u8,
-            TriggerSource::Tim2Trgo => 11u8,
-            TriggerSource::Tim4Trgo => 12u8,
-            TriggerSource::Tim6Trgo => 13u8,
-            TriggerSource::Tim15Trgo => 14u8,
-            TriggerSource::Tim3Oc4 => 15u8,
-            TriggerSource::Tim20Trgo => 16u8,
-            TriggerSource::Tim20Trgo2 => 17u8,
-            TriggerSource::Tim20Oc1 => 18u8,
-            TriggerSource::Tim20Oc2 => 19u8,
-            TriggerSource::Tim20Oc3 => 20u8,
-            TriggerSource::HrtimAdcTrg1 => 21u8,
-            TriggerSource::HrtimAdcTrg3 => 22u8,
-            TriggerSource::HrtimAdcTrg5 => 23u8,
-            TriggerSource::HrtimAdcTrg6 => 24u8,
-            TriggerSource::HrtimAdcTrg7 => 25u8,
-            TriggerSource::HrtimAdcTrg8 => 26u8,
-            TriggerSource::HrtimAdcTrg9 => 27u8,
-            TriggerSource::HrtimAdcTrg10 => 28u8,
-            TriggerSource::LptimOut => 29u8,
-            TriggerSource::Tim7Trgo => 30u8,
-        }
-    }
 }
 
 impl Prescaler {
@@ -317,20 +280,23 @@ impl<'d, T: Instance> Adc<'d, T> {
     }
 
     fn configure_trigger(&mut self, trigger: TriggerCfg, continuous: bool) {
+        // ensure adstart is not set according to docs.
+        while T::regs().cr().read().adstart() {}
+        
         if let Some((exten, sel)) = match trigger {
             TriggerCfg::Software => None,
-            TriggerCfg::RisingEdge(src) => Some((Exten::RISING_EDGE, src.into())),
-            TriggerCfg::FallingEdge(src) => Some((Exten::FALLING_EDGE, src.into())),
-            TriggerCfg::BothEdges(src) => Some((Exten::BOTH_EDGES, src.into())),
+            TriggerCfg::RisingEdge(src) => Some((Exten::RISING_EDGE, src)),
+            TriggerCfg::FallingEdge(src) => Some((Exten::FALLING_EDGE, src)),
+            TriggerCfg::BothEdges(src) => Some((Exten::BOTH_EDGES, src)),
         } {
             // external trigger
             T::regs().cfgr().modify(|w| {
                 w.set_cont(continuous);
                 w.set_exten(exten);
-                w.set_extsel(sel);
+                w.set_extsel(sel as _);
             });
         } else {
-            // single conversion mode, software trigger
+            // software trigger
             T::regs().cfgr().modify(|w| {
                 w.set_cont(continuous);
                 w.set_exten(Exten::DISABLED);
