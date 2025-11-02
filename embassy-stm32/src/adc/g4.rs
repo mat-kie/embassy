@@ -1,3 +1,4 @@
+use cortex_m::register::primask::read;
 #[allow(unused)]
 #[cfg(stm32h7)]
 use pac::adc::vals::{Adcaldif, Difsel, Exten};
@@ -70,6 +71,56 @@ enum Prescaler {
     DividedBy256,
 }
 
+/// Represents the trigger source for the ADC.
+/// Each variant corresponds to a specific trigger source, either from internal
+/// signals (e.g., on-chip timers) or external events via EXTI.
+#[cfg(stm32g4)]
+#[repr(u8)]
+pub enum TriggerSource {
+    Tim1Oc1 = 0,
+    Tim1Oc2,
+    Tim1Oc3,
+    Tim2Oc2,
+    Tim3Trgo,
+    Tim4Oc4,
+    ExtiLine11,
+    Tim8Trgo,
+    Tim8Trgo2,
+    Tim1Trgo,
+    Tim1Trgo2,
+    Tim2Trgo,
+    Tim4Trgo,
+    Tim6Trgo,
+    Tim15Trgo,
+    Tim3Oc4,
+    Tim20Trgo,
+    Tim20Trgo2,
+    Tim20Oc1,
+    Tim20Oc2,
+    Tim20Oc3,
+    HrtimAdcTrg1,
+    HrtimAdcTrg3,
+    HrtimAdcTrg5,
+    HrtimAdcTrg6,
+    HrtimAdcTrg7,
+    HrtimAdcTrg8,
+    HrtimAdcTrg9,
+    HrtimAdcTrg10,
+    LptimOut,
+    Tim7Trgo,
+}
+
+/// Configuration of the ADC Trigger.
+/// It can be triggered by software or the
+/// edges of a TriggerSource signal.
+#[cfg(stm32g4)]
+pub enum TriggerCfg {
+    Software,
+    RisingEdge(TriggerSource),
+    FallingEdge(TriggerSource),
+    BothEdges(TriggerSource),
+}
+
 impl Prescaler {
     fn from_ker_ck(frequency: Hertz) -> Self {
         let raw_prescaler = frequency.0 / MAX_ADC_CLK_FREQ.0;
@@ -123,6 +174,10 @@ impl Prescaler {
 impl<'d, T: Instance> Adc<'d, T> {
     /// Create a new ADC driver.
     pub fn new(adc: Peri<'d, T>) -> Self {
+        Self::new_triggered(adc, TriggerCfg::Software, false)
+    }
+
+    pub fn new_triggered(adc: Peri<'d, T>, trigger: TriggerCfg, continuous: bool) -> Self {
         rcc::enable_and_reset::<T>();
 
         let prescaler = Prescaler::from_ker_ck(T::frequency());
@@ -148,9 +203,8 @@ impl<'d, T: Instance> Adc<'d, T> {
 
         s.calibrate();
         blocking_delay_us(1);
-
         s.enable();
-        s.configure();
+        s.configure_trigger(trigger, continuous);
 
         s
     }
@@ -215,12 +269,29 @@ impl<'d, T: Instance> Adc<'d, T> {
         }
     }
 
-    fn configure(&mut self) {
-        // single conversion mode, software trigger
-        T::regs().cfgr().modify(|w| {
-            w.set_cont(false);
-            w.set_exten(Exten::DISABLED);
-        });
+    fn configure_trigger(&mut self, trigger: TriggerCfg, continuous: bool) {
+        // ensure adstart is not set according to docs.
+        while T::regs().cr().read().adstart() {}
+        
+        if let Some((exten, sel)) = match trigger {
+            TriggerCfg::Software => None,
+            TriggerCfg::RisingEdge(src) => Some((Exten::RISING_EDGE, src)),
+            TriggerCfg::FallingEdge(src) => Some((Exten::FALLING_EDGE, src)),
+            TriggerCfg::BothEdges(src) => Some((Exten::BOTH_EDGES, src)),
+        } {
+            // external trigger
+            T::regs().cfgr().modify(|w| {
+                w.set_cont(continuous);
+                w.set_exten(exten);
+                w.set_extsel(sel as _);
+            });
+        } else {
+            // software trigger
+            T::regs().cfgr().modify(|w| {
+                w.set_cont(continuous);
+                w.set_exten(Exten::DISABLED);
+            });
+        }
     }
 
     /// Enable reading the voltage reference internal channel.
