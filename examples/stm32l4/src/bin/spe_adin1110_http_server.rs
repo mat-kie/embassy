@@ -16,14 +16,14 @@
 use core::marker::PhantomData;
 use core::sync::atomic::{AtomicI32, Ordering};
 
-use defmt::{error, info, println, unwrap, Format};
+use defmt::{Format, error, info, println, unwrap};
 use defmt_rtt as _; // global logger
 use embassy_executor::Spawner;
-use embassy_futures::select::{select, Either};
+use embassy_futures::select::{Either, select};
 use embassy_futures::yield_now;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{Ipv4Address, Ipv4Cidr, Stack, StackResources, StaticConfigV4};
-use embassy_net_adin1110::{Device, Runner, ADIN1110};
+use embassy_net_adin1110::{ADIN1110, Device, Runner};
 use embassy_stm32::gpio::{Input, Level, Output, Pull, Speed};
 use embassy_stm32::i2c::{self, Config as I2C_Config, I2c};
 use embassy_stm32::mode::Async;
@@ -38,7 +38,6 @@ use embedded_io::Write as bWrite;
 use embedded_io_async::Write;
 use heapless::Vec;
 use panic_probe as _;
-use rand::RngCore;
 use static_cell::StaticCell;
 
 bind_interrupts!(struct Irqs {
@@ -60,7 +59,7 @@ pub type SpeSpiCs = ExclusiveDevice<SpeSpi, Output<'static>, Delay>;
 pub type SpeInt = exti::ExtiInput<'static>;
 pub type SpeRst = Output<'static>;
 pub type Adin1110T = ADIN1110<SpeSpiCs>;
-pub type TempSensI2c = I2c<'static, Async>;
+pub type TempSensI2c = I2c<'static, Async, i2c::Master>;
 
 static TEMP: AtomicI32 = AtomicI32::new(0);
 
@@ -116,7 +115,6 @@ async fn main(spawner: Spawner) {
         Irqs,
         dp.DMA1_CH6,
         dp.DMA1_CH7,
-        Hertz(100_000),
         I2C_Config::default(),
     );
 
@@ -161,7 +159,9 @@ async fn main(spawner: Spawner) {
 
     // Check the SPI mode selected with the "HW CFG" dip-switch
     if !cfg1_spi_mode {
-        error!("Driver doesn´t support SPI Protolcol \"OPEN Alliance\".\nplease use the \"Generic SPI\"! Turn On \"HW CFG\": \"SPI_CFG1\"");
+        error!(
+            "Driver doesn´t support SPI Protolcol \"OPEN Alliance\".\nplease use the \"Generic SPI\"! Turn On \"HW CFG\": \"SPI_CFG1\""
+        );
         loop {
             led_uc2_red.toggle();
             Timer::after(Duration::from_hz(10)).await;
@@ -183,11 +183,11 @@ async fn main(spawner: Spawner) {
     .await;
 
     // Start task blink_led
-    unwrap!(spawner.spawn(heartbeat_led(led_uc3_yellow)));
+    spawner.spawn(unwrap!(heartbeat_led(led_uc3_yellow)));
     // Start task temperature measurement
-    unwrap!(spawner.spawn(temp_task(temp_sens_i2c, led_uc4_blue)));
+    spawner.spawn(unwrap!(temp_task(temp_sens_i2c, led_uc4_blue)));
     // Start ethernet task
-    unwrap!(spawner.spawn(ethernet_task(runner)));
+    spawner.spawn(unwrap!(ethernet_task(runner)));
 
     let mut rng = Rng::new(dp.RNG, Irqs);
     // Generate random seed
@@ -210,7 +210,7 @@ async fn main(spawner: Spawner) {
     let (stack, runner) = embassy_net::new(device, ip_cfg, RESOURCES.init(StackResources::new()), seed);
 
     // Launch network task
-    unwrap!(spawner.spawn(net_task(runner)));
+    spawner.spawn(unwrap!(net_task(runner)));
 
     let cfg = wait_for_config(stack).await;
     let local_addr = cfg.address.address();

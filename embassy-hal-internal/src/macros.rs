@@ -8,6 +8,8 @@ macro_rules! peripherals_definition {
                 $(#[$cfg])?
                 #[allow(non_camel_case_types)]
                 #[doc = concat!(stringify!($name), " peripheral")]
+                #[derive(Debug)]
+                #[cfg_attr(feature = "defmt", derive(defmt::Format))]
                 pub struct $name { _private: () }
 
                 $(#[$cfg])?
@@ -56,7 +58,7 @@ macro_rules! peripherals_struct {
             ///Returns all the peripherals *once*
             #[inline]
             pub(crate) fn take_with_cs(_cs: critical_section::CriticalSection) -> Self {
-                #[no_mangle]
+                #[unsafe(no_mangle)]
                 static mut _EMBASSY_DEVICE_PERIPHERALS: bool = false;
 
                 // safety: OK because we're inside a CS.

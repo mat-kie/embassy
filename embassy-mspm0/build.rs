@@ -1,13 +1,14 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap};
-use std::io::Write;
+use std::fmt::Write;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::LazyLock;
 use std::{env, fs};
 
 use common::CfgSet;
-use mspm0_metapac::metadata::METADATA;
+use mspm0_metapac::metadata::{ALL_CHIPS, METADATA};
 use proc_macro2::{Ident, Literal, Span, TokenStream};
 use quote::{format_ident, quote};
 
@@ -15,18 +16,47 @@ use quote::{format_ident, quote};
 mod common;
 
 fn main() {
-    generate_code();
-}
-
-fn generate_code() {
     let mut cfgs = common::CfgSet::new();
     common::set_target_cfgs(&mut cfgs);
 
+    generate_code(&mut cfgs);
+    select_gpio_features(&mut cfgs);
+    interrupt_group_linker_magic();
+}
+
+fn generate_code(cfgs: &mut CfgSet) {
+    #[cfg(any(feature = "rt"))]
+    println!(
+        "cargo:rustc-link-search={}",
+        PathBuf::from(env::var_os("OUT_DIR").unwrap()).display(),
+    );
+
     cfgs.declare_all(&["gpio_pb", "gpio_pc", "int_group1"]);
 
-    let mut singletons = get_singletons(&mut cfgs);
+    let chip_name = match env::vars()
+        .map(|(a, _)| a)
+        .filter(|x| x.starts_with("CARGO_FEATURE_MSPM0") || x.starts_with("CARGO_FEATURE_MSPS"))
+        .get_one()
+    {
+        Ok(x) => x,
+        Err(GetOneError::None) => panic!("No mspm0xx/mspsxx Cargo feature enabled"),
+        Err(GetOneError::Multiple) => panic!("Multiple mspm0xx/mspsxx Cargo features enabled"),
+    }
+    .strip_prefix("CARGO_FEATURE_")
+    .unwrap()
+    .to_ascii_lowercase()
+    .replace('_', "-");
 
-    time_driver(&mut singletons, &mut cfgs);
+    eprintln!("chip: {chip_name}");
+
+    cfgs.enable_all(&get_chip_cfgs(&chip_name));
+    for chip in ALL_CHIPS {
+        cfgs.declare_all(&get_chip_cfgs(&chip));
+    }
+
+    let mut singletons = get_singletons(cfgs);
+
+    time_driver(&mut singletons, cfgs);
 
     let mut g = TokenStream::new();
 
@@ -37,11 +67,186 @@ fn generate_code() {
     g.extend(generate_interrupts());
     g.extend(generate_peripheral_instances());
     g.extend(generate_pin_trait_impls());
+    g.extend(generate_groups());
+    g.extend(generate_dma_channel_count());
+    g.extend(generate_adc_constants(cfgs));
 
     let out_dir = &PathBuf::from(env::var_os("OUT_DIR").unwrap());
     let out_file = out_dir.join("_generated.rs").to_string_lossy().to_string();
     fs::write(&out_file, g.to_string()).unwrap();
     rustfmt(&out_file);
+}
+
+fn get_chip_cfgs(chip_name: &str) -> Vec<String> {
+    let mut cfgs = Vec::new();
+
+    // GPIO on C110x is special as it does not belong to an interrupt group.
+    if chip_name.starts_with("mspm0c1103") || chip_name.starts_with("mspm0c1104") || chip_name.starts_with("msps003f") {
+        cfgs.push("mspm0c110x".to_string());
+    }
+
+    if chip_name.starts_with("mspm0c1105") || chip_name.starts_with("mspm0c1106") {
+        cfgs.push("mspm0c1105_c1106".to_string());
+    }
+
+    // Family ranges (temporary until int groups are generated)
+    //
+    // TODO: Remove this once int group stuff is generated.
+    if chip_name.starts_with("mspm0g110") {
+        cfgs.push("mspm0g110x".to_string());
+    }
+
+    if chip_name.starts_with("mspm0g150") {
+        cfgs.push("mspm0g150x".to_string());
+    }
+
+    if chip_name.starts_with("mspm0g151") {
+        cfgs.push("mspm0g151x".to_string());
+    }
+
+    if chip_name.starts_with("mspm0g310") {
+        cfgs.push("mspm0g310x".to_string());
+    }
+
+    if chip_name.starts_with("mspm0g350") {
+        cfgs.push("mspm0g350x".to_string());
+    }
+
+    if chip_name.starts_with("mspm0g351") {
+        cfgs.push("mspm0g351x".to_string());
+    }
+
+    if chip_name.starts_with("mspm0h321") {
+        cfgs.push("mspm0h321x".to_string());
+    }
+
+    if chip_name.starts_with("mspm0l110") {
+        cfgs.push("mspm0l110x".to_string());
+    }
+
+    if chip_name.starts_with("mspm0l122") {
+        cfgs.push("mspm0l122x".to_string());
+    }
+
+    if chip_name.starts_with("mspm0l130") {
+        cfgs.push("mspm0l130x".to_string());
+    }
+
+    if chip_name.starts_with("mspm0l134") {
+        cfgs.push("mspm0l134x".to_string());
+    }
+
+    if chip_name.starts_with("mspm0l222") {
+        cfgs.push("mspm0l222x".to_string());
+    }
+
+    cfgs
+}
+
+/// Interrupt groups use a weakly linked symbols and #[linkage = "extern_weak"] is nightly we need to
+/// do some linker magic to create weak linkage.
+fn interrupt_group_linker_magic() {
+    let mut file = String::new();
+
+    for group in METADATA.interrupt_groups {
+        for interrupt in group.interrupts.iter() {
+            let name = interrupt.name;
+
+            writeln!(&mut file, "PROVIDE({name} = DefaultHandler);").unwrap();
+        }
+    }
+
+    let out_dir = &PathBuf::from(env::var_os("OUT_DIR").unwrap());
+    let out_file = out_dir.join("interrupt_group.x");
+    fs::write(&out_file, file).unwrap();
+}
+
+fn generate_groups() -> TokenStream {
+    let group_vectors = METADATA.interrupt_groups.iter().map(|group| {
+        let vectors = group.interrupts.iter().map(|interrupt| {
+            let fn_name = Ident::new(interrupt.name, Span::call_site());
+
+            quote! {
+                pub(crate) fn #fn_name();
+            }
+        });
+
+        quote! { #(#vectors)* }
+    });
+
+    let groups = METADATA.interrupt_groups.iter().map(|group| {
+        let interrupt_group_name = Ident::new(group.name, Span::call_site());
+        let group_enum = Ident::new(&format!("Group{}", &group.name[5..]), Span::call_site());
+        let group_number = Literal::u32_unsuffixed(group.number);
+
+        let matches = group.interrupts.iter().map(|interrupt| {
+            let variant = Ident::new(&interrupt.name, Span::call_site());
+
+            quote! {
+                #group_enum::#variant => unsafe { group_vectors::#variant() },
+            }
+        });
+
+        quote! {
+            #[cfg(feature = "rt")]
+            #[crate::pac::interrupt]
+            fn #interrupt_group_name() {
+                use crate::pac::#group_enum;
+
+                let group = crate::pac::CPUSS.int_group(#group_number);
+                let stat = group.iidx().read().stat();
+
+                // check for spurious interrupts
+                if stat == crate::pac::cpuss::vals::Iidx::NO_INTR {
+                    return;
+                }
+
+                // MUST subtract by 1 because NO_INTR offsets IIDX values.
+                let iidx = stat.to_bits() - 1;
+
+                let Ok(group) = #group_enum::try_from(iidx as u8) else {
+                    return;
+                };
+
+                match group {
+                    #(#matches)*
+                }
+            }
+        }
+    });
+
+    quote! {
+        #(#groups)*
+
+        #[cfg(feature = "rt")]
+        mod group_vectors {
+            unsafe extern "Rust" {
+                #(#group_vectors)*
+            }
+        }
+    }
+}
+
+fn generate_dma_channel_count() -> TokenStream {
+    let count = METADATA.dma_channels.len();
+
+    quote! { pub const DMA_CHANNELS: usize = #count; }
+}
+
+fn generate_adc_constants(cfgs: &mut CfgSet) -> TokenStream {
+    let vrsel = METADATA.adc_vrsel;
+    let memctl = METADATA.adc_memctl;
+
+    cfgs.declare("adc_neg_vref");
+    match vrsel {
+        3 => (),
+        5 => cfgs.enable("adc_neg_vref"),
+        _ => panic!("Unsupported ADC VRSEL value: {vrsel}"),
+    }
+    quote! {
+        pub const ADC_VRSEL: u8 = #vrsel;
+        pub const ADC_MEMCTL: u8 = #memctl;
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -146,7 +351,7 @@ fn make_valid_identifier(s: &str) -> Singleton {
 }
 
 fn generate_pincm_mapping() -> TokenStream {
-    let pincms = METADATA.pincm_mappings.iter().map(|mapping| {
+    let pincms = METADATA.pins.iter().map(|mapping| {
         let port_letter = mapping.pin.strip_prefix("P").unwrap();
         let port_base = (port_letter.chars().next().unwrap() as u8 - b'A') * 32;
         // This assumes all ports are single letter length.
@@ -174,11 +379,11 @@ fn generate_pincm_mapping() -> TokenStream {
 }
 
 fn generate_pin() -> TokenStream {
-    let pin_impls = METADATA.pincm_mappings.iter().map(|pincm_mapping| {
-        let name = Ident::new(&pincm_mapping.pin, Span::call_site());
-        let port_letter = pincm_mapping.pin.strip_prefix("P").unwrap();
+    let pin_impls = METADATA.pins.iter().map(|pin| {
+        let name = Ident::new(&pin.pin, Span::call_site());
+        let port_letter = pin.pin.strip_prefix("P").unwrap();
         let port_letter = port_letter.chars().next().unwrap();
-        let pin_number = Literal::u8_unsuffixed(pincm_mapping.pin[2..].parse::<u8>().unwrap());
+        let pin_number = Literal::u8_unsuffixed(pin.pin[2..].parse::<u8>().unwrap());
 
         let port = Ident::new(&format!("Port{}", port_letter), Span::call_site());
 
@@ -365,6 +570,8 @@ fn generate_interrupts() -> TokenStream {
         pub fn enable_group_interrupts(_cs: critical_section::CriticalSection) {
             use crate::interrupt::typelevel::Interrupt;
 
+            // This is empty for C1105/6
+            #[allow(unused_unsafe)]
             unsafe {
                 #(#group_interrupt_enables)*
             }
@@ -377,16 +584,30 @@ fn generate_peripheral_instances() -> TokenStream {
 
     for peripheral in METADATA.peripherals {
         let peri = format_ident!("{}", peripheral.name);
+        let fifo_size = peripheral.sys_fentries;
 
-        // Will be filled in when uart implementation is finished
-        let _ = peri;
         let tokens = match peripheral.kind {
             "uart" => Some(quote! { impl_uart_instance!(#peri); }),
+            "i2c" => Some(quote! { impl_i2c_instance!(#peri, #fifo_size); }),
+            "wwdt" => Some(quote! { impl_wwdt_instance!(#peri); }),
+            "adc" => Some(quote! { impl_adc_instance!(#peri); }),
             _ => None,
         };
 
         if let Some(tokens) = tokens {
             impls.push(tokens);
+        }
+    }
+
+    // DMA channels
+    for dma_channel in METADATA.dma_channels.iter() {
+        let peri = format_ident!("DMA_CH{}", dma_channel.number);
+        let num = dma_channel.number;
+
+        if dma_channel.full {
+            impls.push(quote! { impl_full_dma_channel!(#peri, #num); });
+        } else {
+            impls.push(quote! { impl_dma_channel!(#peri, #num); });
         }
     }
 
@@ -416,6 +637,13 @@ fn generate_pin_trait_impls() -> TokenStream {
                 ("uart", "RX") => Some(quote! { impl_uart_rx_pin!(#peri, #pin_name, #pf); }),
                 ("uart", "CTS") => Some(quote! { impl_uart_cts_pin!(#peri, #pin_name, #pf); }),
                 ("uart", "RTS") => Some(quote! { impl_uart_rts_pin!(#peri, #pin_name, #pf); }),
+                ("i2c", "SDA") => Some(quote! { impl_i2c_sda_pin!(#peri, #pin_name, #pf); }),
+                ("i2c", "SCL") => Some(quote! { impl_i2c_scl_pin!(#peri, #pin_name, #pf); }),
+                ("adc", s) => {
+                    let signal = s.parse::<u8>().unwrap();
+                    Some(quote! { impl_adc_pin!(#peri, #pin_name, #signal); })
+                }
+
                 _ => None,
             };
 
@@ -427,6 +655,35 @@ fn generate_pin_trait_impls() -> TokenStream {
 
     quote! {
         #(#impls)*
+    }
+}
+
+fn select_gpio_features(cfgs: &mut CfgSet) {
+    cfgs.declare_all(&[
+        "gpioa_interrupt",
+        "gpioa_group",
+        "gpiob_interrupt",
+        "gpiob_group",
+        "gpioc_group",
+    ]);
+
+    for interrupt in METADATA.interrupts.iter() {
+        match interrupt.name {
+            "GPIOA" => cfgs.enable("gpioa_interrupt"),
+            "GPIOB" => cfgs.enable("gpiob_interrupt"),
+            _ => (),
+        }
+    }
+
+    for group in METADATA.interrupt_groups.iter() {
+        for interrupt in group.interrupts {
+            match interrupt.name {
+                "GPIOA" => cfgs.enable("gpioa_group"),
+                "GPIOB" => cfgs.enable("gpiob_group"),
+                "GPIOC" => cfgs.enable("gpioc_group"),
+                _ => (),
+            }
+        }
     }
 }
 

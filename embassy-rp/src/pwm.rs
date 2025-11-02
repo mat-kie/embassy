@@ -3,13 +3,13 @@
 use embassy_hal_internal::{Peri, PeripheralType};
 pub use embedded_hal_1::pwm::SetDutyCycle;
 use embedded_hal_1::pwm::{Error, ErrorKind, ErrorType};
-use fixed::traits::ToFixed;
 use fixed::FixedU16;
+use fixed::traits::ToFixed;
 use pac::pwm::regs::{ChDiv, Intr};
 use pac::pwm::vals::Divmode;
 
 use crate::gpio::{AnyPin, Pin as GpioPin, Pull, SealedPin as _};
-use crate::{pac, peripherals, RegExt};
+use crate::{RegExt, pac, peripherals};
 
 /// The configuration of a PWM slice.
 /// Note the period in clock cycles of a slice can be computed as:
@@ -464,6 +464,10 @@ impl<'d> Drop for Pwm<'d> {
         pac::PWM.ch(self.slice).csr().write_clear(|w| w.set_en(false));
         if let Some(pin) = &self.pin_a {
             pin.gpio().ctrl().write(|w| w.set_funcsel(31));
+            // Enable pin PULL-DOWN
+            pin.pad_ctrl().modify(|w| {
+                w.set_pde(true);
+            });
         }
         if let Some(pin) = &self.pin_b {
             pin.gpio().ctrl().write(|w| w.set_funcsel(31));
@@ -471,6 +475,10 @@ impl<'d> Drop for Pwm<'d> {
             // Disable input mode. Only pin_b can be input, so not needed for pin_a
             pin.pad_ctrl().modify(|w| {
                 w.set_ie(false);
+            });
+            // Enable pin PULL-DOWN
+            pin.pad_ctrl().modify(|w| {
+                w.set_pde(true);
             });
         }
     }

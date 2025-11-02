@@ -6,7 +6,7 @@ use core::mem::MaybeUninit;
 use defmt::*;
 use embassy_executor::Spawner;
 use embassy_stm32::usart::{Config, InterruptHandler, Uart};
-use embassy_stm32::{bind_interrupts, peripherals, SharedData};
+use embassy_stm32::{SharedData, bind_interrupts, peripherals};
 use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(struct Irqs{
@@ -14,7 +14,7 @@ bind_interrupts!(struct Irqs{
     LPUART1 => InterruptHandler<peripherals::LPUART1>;
 });
 
-#[link_section = ".shared_data"]
+#[unsafe(link_section = ".shared_data")]
 static SHARED_DATA: MaybeUninit<SharedData> = MaybeUninit::uninit();
 
 /*
